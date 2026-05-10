@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "80:${PORT:-3000}"
+    restart: "no"
+    depends_on:
+      - seq
+    environment:
+      SEQ_URL: "${SEQ_URL}"
+      SEQ_API_KEY: "${SEQ_API_KEY}"
+
+  seq:
+    image: datalust/seq:latest
+    container_name: seq
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_ADMINUSERNAME: "${SEQ_ADMIN_USER}"
+      SEQ_FIRSTRUN_ADMINPASSWORD: "${SEQ_ADMIN_PASS}"
+    ports:
+      - "5341:80"              # Seq UI
+      - "5342:5341"            # Ingestion endpoint
+    volumes:
+      - seq-data:/data
+
+volumes:
+  seq-data:

@@ -135,10 +135,7 @@ export type ProgramDataResponse = {
   confirmed: number;
 };
 
-export type ProfileProgramsResponse = {
-  multi?: ProgramDataResponse | null;
-  neo?: ProgramDataResponse | null;
-};
+export type ProfileProgramsResponse = Array<Record<string, ProgramDataResponse>>;
 
 export type BuildChooseInviterBodyRequest = {
   program: number;
@@ -241,6 +238,37 @@ export type BuildMarketingLockPosBodyRequest = {
 };
 
 export type BuildMarketingUnlockPosBodyRequest = BuildMarketingLockPosBodyRequest;
+
+export type BuildMarketingDeployPlaceBodyRequest = {
+  key: number;
+  parentAddr: string;
+  kind: number;
+  profileAddr: string;
+  placeNumber: number;
+  inviterProfileAddr?: string | null;
+};
+
+export type DeployPlaceBodyResponse = {
+  boc_hex?: string;
+};
+
+export type BuildMarketingPayBonusBodyRequest = {
+  key: number;
+  walletAddr: string;
+};
+
+export type PayBonusBodyResponse = {
+  boc_hex?: string;
+};
+
+export type BuildMarketingCancelTaskBodyRequest = {
+  key: number;
+  comment: string;
+};
+
+export type CancelTaskBodyResponse = {
+  boc_hex?: string;
+};
 
 export type MarketingTaskPayloadResponse = {
   tag: number;
@@ -386,6 +414,9 @@ export interface ContractsApi {
   buildMarketingBuyPlaceByJettonBody: (request: BuildMarketingBuyPlaceByJettonBodyRequest) => Promise<BuyPlaceByJettonBodyResponse | null>;
   buildMarketingLockPosBody: (request: BuildMarketingLockPosBodyRequest) => Promise<LockPosBodyResponse | null>;
   buildMarketingUnlockPosBody: (request: BuildMarketingUnlockPosBodyRequest) => Promise<UnlockPosBodyResponse | null>;
+  buildMarketingDeployPlaceBody: (request: BuildMarketingDeployPlaceBodyRequest) => Promise<DeployPlaceBodyResponse | null>;
+  buildMarketingPayBonusBody: (request: BuildMarketingPayBonusBodyRequest) => Promise<PayBonusBodyResponse | null>;
+  buildMarketingCancelTaskBody: (request: BuildMarketingCancelTaskBodyRequest) => Promise<CancelTaskBodyResponse | null>;
   getMarketingFirstTask: (addr: string) => Promise<FirstTaskResponse | null>;
   getMarketingData: (addr: string) => Promise<MarketingDataResponse | null>;
   getMatrixPlaceData: (addr: string) => Promise<MatrixPlaceDataResponse | null>;
@@ -702,6 +733,52 @@ export async function buildMarketingUnlockPosBody(request: BuildMarketingUnlockP
   return safeGet<UnlockPosBodyResponse>(url.toString());
 }
 
+export async function buildMarketingDeployPlaceBody(
+  request: BuildMarketingDeployPlaceBodyRequest,
+): Promise<DeployPlaceBodyResponse | null> {
+  const parentAddr = request.parentAddr?.trim();
+  const profileAddr = request.profileAddr?.trim();
+  const inviterProfileAddr = request.inviterProfileAddr?.trim();
+  if (!parentAddr || !profileAddr) return null;
+  if (!Number.isFinite(request.key) || !Number.isFinite(request.kind) || !Number.isFinite(request.placeNumber)) return null;
+
+  const url = new URL("/contracts/marketing/body/deploy-place", normalizedBase || defaultOrigin);
+  url.searchParams.set("key", String(request.key));
+  url.searchParams.set("parent_addr", parentAddr);
+  url.searchParams.set("kind", String(request.kind));
+  url.searchParams.set("profile_addr", profileAddr);
+  url.searchParams.set("place_no", String(request.placeNumber));
+  if (inviterProfileAddr) url.searchParams.set("inviter_profile_addr", inviterProfileAddr);
+
+  return safeGet<DeployPlaceBodyResponse>(url.toString());
+}
+
+export async function buildMarketingPayBonusBody(
+  request: BuildMarketingPayBonusBodyRequest,
+): Promise<PayBonusBodyResponse | null> {
+  const walletAddr = request.walletAddr?.trim();
+  if (!walletAddr || !Number.isFinite(request.key)) return null;
+
+  const url = new URL("/contracts/marketing/body/pay-bonus", normalizedBase || defaultOrigin);
+  url.searchParams.set("key", String(request.key));
+  url.searchParams.set("wallet_addr", walletAddr);
+
+  return safeGet<PayBonusBodyResponse>(url.toString());
+}
+
+export async function buildMarketingCancelTaskBody(
+  request: BuildMarketingCancelTaskBodyRequest,
+): Promise<CancelTaskBodyResponse | null> {
+  const comment = request.comment?.trim();
+  if (!comment || !Number.isFinite(request.key)) return null;
+
+  const url = new URL("/contracts/marketing/body/cancel-task", normalizedBase || defaultOrigin);
+  url.searchParams.set("key", String(request.key));
+  url.searchParams.set("comment", comment);
+
+  return safeGet<CancelTaskBodyResponse>(url.toString());
+}
+
 export async function getMarketingFirstTask(addr: string): Promise<FirstTaskResponse | null> {
   const normalizedAddr = addr?.trim();
   if (!normalizedAddr) return null;
@@ -767,6 +844,9 @@ export const contractsApi: ContractsApi = {
   buildMarketingBuyPlaceByJettonBody,
   buildMarketingLockPosBody,
   buildMarketingUnlockPosBody,
+  buildMarketingDeployPlaceBody,
+  buildMarketingPayBonusBody,
+  buildMarketingCancelTaskBody,
   getMarketingFirstTask,
   getMarketingData,
   getMatrixPlaceData,

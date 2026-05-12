@@ -6,13 +6,14 @@ import { LockRow, locksRepository, NewLock } from "../repositories/locksReposito
 import { logger } from "../logger";
 import { getMarketingFirstTask, MarketingTaskResponse, PlaceDataResponse } from "../api/contractsApi";
 import { getMaxPlaceNumber, getPlaceByTaskKey, marketingApi, MarketingNextPos, MarketingPlace } from "../api/marketingApi";
-import { fetchMatrixPlaceData, fetchNeoInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno } from "./contractsService";
+import { fetchMatrixPlaceData, fetchInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno } from "./contractsService";
 import { Marketing } from "../contracts/Marketing";
 import { PlaceInfo, placeInfoToCell } from "../contracts/Place";
 
 
 // Single multi queue address from env or config
 const WATCHED_MARKETING_ADDRESS: string = tonConfig.marketingQueueAddress;
+const NEO_PROGRAM = 0x435acabf;
 
 
 export class TaskProcessor {
@@ -390,11 +391,7 @@ export class TaskProcessor {
       //     await logger.info(`[MarketingTaskProcessor] removed lock #${lock.id}`);
           
       // }
-      // else 
-      // {
-      //   await logger.error(`[MarketingTaskProcessor] unsupported tag (key = ${taskKey})`);
-      //   return false;
-      // }
+      
 
       else if (taskVal.payload.tag == 5) {
         console.log("pay jetton bonus");
@@ -412,6 +409,13 @@ export class TaskProcessor {
         const payBonusBody = Marketing.payBonusMessage(taskKey, walletAddr, taskVal.query_id);
         await sendPaymentToMarketing(rawMarketingAddress, taskKey, payBonusBody, toNano('0.5'));
         await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to marketing for task key=${taskKey}`);
+      }
+
+      else 
+      {
+        //await logger.error(`[MarketingTaskProcessor] unsupported tag (key = ${taskKey})`);
+        console.error(`[MarketingTaskProcessor] unsupported tag (key = ${taskKey})`);
+        return false;
       }
 
       await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
@@ -463,7 +467,7 @@ export class TaskProcessor {
     }
 
     // get profile of the inviter
-    const inviterProfile = await fetchNeoInviterProfileAddr(rawPofileAddr);
+    const inviterProfile = await fetchInviterProfileAddr(rawPofileAddr, NEO_PROGRAM);
     if (!inviterProfile) {
       await logger.error(`[MarketingTaskProcessor] profile ${rawPofileAddr} has not chosen inviter yet`);
       return null;
@@ -494,7 +498,7 @@ export class TaskProcessor {
    
     const mp = `${parentRow.mp}${childPos.toString(16).toUpperCase().padStart(8, "0")}`;
 
-    const rawInviterProfileAddr = await fetchNeoInviterProfileAddr(taskVal.profile_addr);
+    const rawInviterProfileAddr = await fetchInviterProfileAddr(taskVal.profile_addr, NEO_PROGRAM);
 
     const payload = taskVal.payload;
     

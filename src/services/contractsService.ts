@@ -5,9 +5,31 @@ import { WalletContractV4, type OpenedContract } from "@ton/ton";
 import { tonConfig } from "../config";
 import { retryExp } from "../utils/retry";
 import { logger } from "../logger";
-import { FirstTaskResponse, getInviteData, getMarketingFirstTask, getMatrixPlaceData, getPlaceData, getProfileNftData, getProfilePrograms, MatrixPlaceDataResponse, PlaceDataResponse, ProfileContentResponse, ProfileDataResponse } from "../api/contractsApi";
+import { FirstTaskResponse, getInviteData, getMarketingFirstTask, getMatrixPlaceData, getPlaceData, getProfileNftData, getProfilePrograms, MatrixPlaceDataResponse, PlaceDataResponse, ProfileContentResponse, ProfileDataResponse, ProgramDataResponse } from "../api/contractsApi";
 import { getPlaceAddress, MarketingPlaceAddress } from "../api/marketingApi";
 
+const normalizeProgramCode = (program: number | string) => {
+  if (typeof program === "number") {
+    return program.toString(16).toUpperCase().padStart(8, "0");
+  }
+
+  return program.replace(/^0x/i, "").toUpperCase();
+};
+
+
+const findProgramData = (
+  programs: Array<Record<string, ProgramDataResponse>>,
+  program: number | string,
+) => {
+  const normalizedProgramCode = normalizeProgramCode(program);
+
+  for (const program of programs) {
+    const entry = Object.entries(program).find(([key]) => key.toUpperCase() === normalizedProgramCode);
+    if (entry) return entry[1];
+  }
+
+  return null;
+};
 
 export const fetchMatrixPlaceData = async (placeAddr: string): Promise<MatrixPlaceDataResponse | null> => {
   const placeData = await retryExp(() => limited(() => getMatrixPlaceData(placeAddr)));
@@ -39,15 +61,14 @@ export const fetchPlaceAddress = async (rawMarketingAddr: string, m: number, raw
   return res;
 }
 
-export const fetchNeoInviterProfileAddr = async (rawProfileAddr: string): Promise<string | null> => {
+export const fetchInviterProfileAddr = async (rawProfileAddr: string, program: number | string): Promise<string | null> => {
   const programs = await getProfilePrograms(rawProfileAddr);
   if (!programs)
   {
     return null;
   }
 
-  // todo: pass program code
-  const programData = programs.neo;
+  const programData = findProgramData(programs, program);
 
   if (!programData || !programData.confirmed) {
     return null;

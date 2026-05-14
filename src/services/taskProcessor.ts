@@ -1,14 +1,12 @@
-import { Address, Cell, loadComputeSkipReason, toNano } from "@ton/core";
-import { getTonClient } from "./tonClient";
+import { Address, Cell, toNano } from "@ton/core";
 import { placesRepository, type NewPlace, type PlaceRow } from "../repositories/placesRepository";
 import { tonConfig } from "../config";
 import { LockRow, locksRepository, NewLock } from "../repositories/locksRepository";
 import { logger } from "../logger";
-import { getMarketingFirstTask, MarketingTaskResponse, PlaceDataResponse } from "../api/contractsApi";
-import { getMaxPlaceNumber, getPlaceByTaskKey, marketingApi, MarketingNextPos, MarketingPlace } from "../api/marketingApi";
-import { fetchMatrixPlaceData, fetchInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno } from "./contractsService";
-import { Marketing } from "../contracts/Marketing";
-import { PlaceInfo, placeInfoToCell } from "../contracts/Place";
+import { getMarketingFirstTask, MarketingTaskResponse, MultiTaskItemResponse, PlacePosDataResponse } from "../api/contractsApi";
+import { getMaxPlaceNumber, getPlaceByTaskKey, getPlacesCount, getTotalPlaceCount, marketingApi, MarketingNextPos, MarketingPlace } from "../api/marketingApi";
+import { fetchMatrixPlaceData, fetchInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno, fetchDeployPlaceBody, fetchCancelTaskBody, fetchPayBonusBody, waitForTaskCanceled } from "./contractsService";
+
 
 
 // Single multi queue address from env or config
@@ -27,8 +25,7 @@ export class TaskProcessor {
       return;
     }
 
-    //await logger.info(`MarketingTaskProcessor: scheduling every 2 seconds for multi ${WATCHED_MARKETING_ADDRESS || "<none>"}.`);
-    console.info(`MarketingTaskProcessor: scheduling every 2 seconds for multi ${WATCHED_MARKETING_ADDRESS || "<none>"}.`);
+    await logger.info(`MarketingTaskProcessor: scheduling every 2 seconds for multi ${WATCHED_MARKETING_ADDRESS || "<none>"}.`);
 
     const runOnce = async (): Promise<void> => {
       if (this.running) {
@@ -42,8 +39,7 @@ export class TaskProcessor {
           return;
         }
       } catch (error) {
-        //await logger.error(`MarketingTaskProcessor run failed: ${error}`);
-        console.error(`MarketingTaskProcessor run failed: ${error}`);
+        await logger.error(`MarketingTaskProcessor run failed: ${error}`);
         this.timer = null;
         return;
       } finally {
@@ -71,8 +67,7 @@ export class TaskProcessor {
       //const firstTask = await fetchFirstTask(rawMarketingAddress);
       const firstTask = await getMarketingFirstTask(rawMarketingAddress);
       if (!firstTask || firstTask.flag == 0) {
-        //await logger.info(`[MarketingTaskProcessor] last: <empty>`);
-        console.info(`[MarketingTaskProcessor] last: <empty>`);
+        await logger.info(`[MarketingTaskProcessor] last: <empty>`);
         return true;
       }
 
@@ -90,331 +85,242 @@ export class TaskProcessor {
         const waitMs = 2000 * (2 ** (attempt - 1));
 
         if (attempt < maxAttempts) {
-          //await logger.info(`[MarketingTaskProcessor] lastTaskKey=${taskKey} has not updated yet (attempt ${attempt}/${maxAttempts}), waiting ${waitMs / 1000}s`);
-          console.info(`[MarketingTaskProcessor] lastTaskKey=${taskKey} has not updated yet (attempt ${attempt}/${maxAttempts}), waiting ${waitMs / 1000}s`);
+          await logger.info(`[MarketingTaskProcessor] lastTaskKey=${taskKey} has not updated yet (attempt ${attempt}/${maxAttempts}), waiting ${waitMs / 1000}s`);
           await new Promise((resolve) => setTimeout(resolve, waitMs));
           return true;
         }
 
-        console.error(`[MarketingTaskProcessor] lastTaskKey=${taskKey} eventually not updated (attempt ${attempt}/${maxAttempts})`);
-        //await logger.error(`[MarketingTaskProcessor] lastTaskKey=${taskKey} eventually not updated (attempt ${attempt}/${maxAttempts})`);
+        await logger.error(`[MarketingTaskProcessor] lastTaskKey=${taskKey} eventually not updated (attempt ${attempt}/${maxAttempts})`);
         return false;
       }
 
-
-      // For create_place or create_clone, skip if place with this task key already exists.
-      if (taskVal.payload.tag === 1 || taskVal.payload.tag === 2) {
+      // buy_place
+      if (taskVal.payload.tag === 1) {
         const payload = taskVal.payload;
 
-        // stop if key exists in db
-        const existing = await getPlaceByTaskKey(rawMarketingAddress, taskKey);
-        if (existing) {
-            // if (!existing.confirmed)
-            // {
-            //   await logger.info("addr data not set");
-            // }
-
-          await logger.error(`[MarketingTaskProcessor] skipping task key=${taskKey} because place already exists`);
-          return false;
-        }
-
-        // get root place
-        const rootPlace = await this.findRootPlace(
+        // check first parameter
+        const totalPlaceNumber = await getTotalPlaceCount(
           rawMarketingAddress, 
-          taskVal.m,
           taskVal.profile_addr
         );
-       
-        if (!rootPlace) {
-          console.error(`[MarketingTaskProcessor] unable to resolve root place for profile ${taskVal.profile_addr} (m=${taskVal.m}, task key=${taskKey})`);
-          //await logger.error(`[MarketingTaskProcessor] unable to resolve root place for profile ${this.toFriendly(taskVal.profile)} (m=${taskVal.m}, task key=${taskKey})`);
+
+        const isFirstPlaceTask = payload.first === true;
+        if (isFirstPlaceTask && totalPlaceNumber > 0) {
+          await logger.error(`[MarketingTaskProcessor] invalid first place task for profile ${taskVal.profile_addr}: total places count is ${totalPlaceNumber} (task key=${taskKey})`);
+          await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "First place task received when profile already has places");
           return false;
         }
 
-        console.info(`[MarketingTaskProcessor] resolved root place for profile ${taskVal.profile_addr}} (m=${taskVal.m}): address = ${rootPlace.addr}`);
-        // await logger.info(`[MarketingTaskProcessor] resolved root place for profile ${this.toFriendly(taskVal.profile)} (m=${taskVal.m}): address = ${rootPlace.addr}`);
+        if (!isFirstPlaceTask && totalPlaceNumber === 0) {
+          await logger.error(`[MarketingTaskProcessor] invalid non-first place task for profile ${taskVal.profile_addr}: total places count is 0 (task key=${taskKey})`);
+          await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "Non-first place task received when profile has no places");
+          return false;
+        }
 
-        // if first place 
+        const created = await this.createPlace(rawMarketingAddress, taskKey, taskVal, payload.pos ?? null);
+        if (!created) {
+          return false;
+        }
+      }
 
-        // look for the parent
-        let rawParentAddr: string;
-        if (payload.tag === 1 && payload.pos) {  
-            rawParentAddr = payload.pos.parent_addr;
-            const pos = payload.pos.pos;
 
-            //await logger.info(`[MarketingTaskProcessor] fixed pos is set for create_place to addr = ${parentAddr} (task key=${taskKey}`);
-            console.info(`[MarketingTaskProcessor] fixed pos is set for create_place to addr = ${rawParentAddr} (task key=${taskKey}`);
+      // create_clone
+      else if (taskVal.payload.tag === 2) {
+        const created = await this.createPlace(rawMarketingAddress, taskKey, taskVal);
+        if (!created) {
+          return false;
+        }
+      }
 
-        //     const fixedparent = await placesRepository.getPlaceByAddress(parentAddr);
-        //     if (!fixedparent)
-        //     {
-        //         await logger.error(`[MarketingTaskProcessor] fixedparent cannot be find (task key=${taskKey})`);
-        //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-        //         await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-        //         await logger.info('----------------------------------------------------------------------');
-        //         return true;
-        //     }
+      // lock_pos
+      else if (taskVal.payload.tag === 3) {
+          if (!taskVal.payload.pos)
+          {
+              await this.logLockErr("pos is not set", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "pos is not set");
+              return false;
+          }
 
-        //     if (fixedparent.filling >= 2)
-        //     {
-        //         await logger.error(`[MarketingTaskProcessor] fixedparent is full (task key=${taskKey})`);
-        //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-        //         await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-        //         await logger.info('----------------------------------------------------------------------');
-        //         return true;
-        //     }
+          // validation
+          const profileData = await fetchProfileData(taskVal.profile_addr);
+          if (!profileData || !profileData.owner_addr)
+          {
+            await this.logLockErr("failed to load profile data", taskKey, taskVal);
+            await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "failed to load profile data");
+            return false;
+          }
 
-            // if (fixedparent.m != taskVal.m)
-            // {
-            //     await logger.error(`[MarketingTaskProcessor] fixedparent is in the different matrix (task key=${taskKey})`);
-            //     await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-            //     await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-            //     await logger.info('----------------------------------------------------------------------');
-            //     return true;
-            // }
+          if (taskVal.payload.source_addr != profileData.owner_addr)
+          {
+            await this.logLockErr("unauthorized sender", taskKey, taskVal);
+            await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "unauthorized sender");
+            return false;
+          }
 
-            // if (!fixedparent.mp.startsWith(rootPlace.mp))
-            // {
-            //     await logger.error(`[MarketingTaskProcessor] fixedparent is in the different structure (task key=${taskKey})`);
-            //     await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-            //     await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-            //     await logger.info('----------------------------------------------------------------------');
-            //     return true;
-            // }
+          const rootPlace = await this.findRootPlace(rawMarketingAddress, taskVal.m, taskVal.profile_addr);
+          if (!rootPlace)
+          {
+              await this.logLockErr("failed to fetch root place", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "failed to fetch root place");
+              return false;
+          }
 
-            // if (pos==0 && fixedparent.filling == 1)
-            // {
-            //     await logger.error(`[MarketingTaskProcessor] selected pos is already taken (task key=${taskKey})`);
-            //     await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-            //     await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-            //     await logger.info('----------------------------------------------------------------------');
-            //     return true;
-            // }
+          const placeRow = await placesRepository.getPlaceByAddress(
+            rawMarketingAddress,
+            taskVal.payload.pos.parent_addr);
+            
+          if (!placeRow)
+          {
+              await this.logLockErr("failed to get place", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "failed to get place");
+              return false;
+          }
 
-            // if (pos==1 && fixedparent.filling == 0)
-            // {
-            //     await logger.error(`[MarketingTaskProcessor] selected pos = 1 when 0 is empty yet (task key=${taskKey})`);
-            //     await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-            //     await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-            //     await logger.info('----------------------------------------------------------------------');
-            //     return true;
-            // }
-    
+          if (placeRow.m != taskVal.m)
+          {
+              await this.logLockErr(`place is in the diff matrix`, taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, `place is in the diff matrix`);
+              return true;
+          }
 
-            // await logger.info(`[MarketingTaskProcessor] parent position for profile ${this.toFriendly(taskVal.profile)} (m=${taskVal.m}): address= ${fixedparent.addr}`);
+          const rootPlaceInt = await placesRepository.getPlaceByAddress(rawMarketingAddress, rootPlace.addr);
+          if (!rootPlaceInt){
+            await this.logLockErr(`cannot load root place info`, taskKey, taskVal);
+            await this.cancelTask(rawMarketingAddress, taskKey, taskVal, `cannot load root place info`);
+            return false;
+          }
+          
+          if (!placeRow.mp.startsWith(rootPlaceInt.mp))
+          {
+              await this.logLockErr("place is in the diff subtree", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "place is in the diff subtree");
+              return false;
+          }
 
-            // parentRow = fixedparent;
+          if (placeRow.seq_no == 0)
+          {
+              await this.logLockErr("empty place", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "empty place");
+              return false;
+          }
+
+          const placeAddr = taskVal.payload.pos.parent_addr;
+          const lockedPos = taskVal.payload.pos.pos;
+          const profileAddr = taskVal.profile_addr;
+
+          const existingLock = await marketingApi.getLockByPlaceAddrAndLockedPos(rawMarketingAddress, placeAddr, lockedPos, profileAddr);
+          if (existingLock)
+          {
+              await this.logLockErr(`duplicate lock`, taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, `duplicate lock`);
+              await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
+              await logger.info('----------------------------------------------------------------------');
+              return true;
+          }
+
+          const otherPosLock = await marketingApi.getLockByPlaceAddrAndLockedPos(rawMarketingAddress, placeAddr, lockedPos == 0 ? 1 : 0, profileAddr);
+          if (otherPosLock)
+          {
+              await this.logLockErr(`sibling pos is already locked`, taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, `sibling pos is already locked`);
+              return false;
+          }
+
+        
+          // processing
+          const createResult = await this.createLockFromTask(taskKey, taskVal, placeRow, taskVal.payload.pos.pos);
+
+          await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "lock successfully set");
+       
+          await locksRepository.updateLockConfirm(rawMarketingAddress, createResult.id);
+          await logger.info(`[MarketingTaskProcessor] updated lock #${createResult.id} with confirmed`);
+      }
+
+      // unlock_pos
+      else if (taskVal.payload.tag === 4) {
+          if (!taskVal.payload.pos)
+          {
+              await this.logUnlockErr("pos is not set", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "pos is not set");
+              return false;
+          }
+
+          const profileData = await fetchProfileData(taskVal.profile_addr);
+          if (!profileData || !profileData.owner_addr)
+          {
+            await this.logUnlockErr("failed to load profile data", taskKey, taskVal);
+            await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "failed to load profile data");
+            return false;
+          }
+
+          if (taskVal.payload.source_addr != profileData.owner_addr)
+          {
+            await this.logUnlockErr("unauthorized sender", taskKey, taskVal);
+            await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "unauthorized sender");
+            return false;
+          }
+
+          const placeAddr = taskVal.payload.pos.parent_addr;
+          const lockedPos = taskVal.payload.pos.pos;
+          const profileAddr = taskVal.profile_addr;
+
+          const lockInt = await locksRepository.getLockByPlaceAddrAndLockedPos(rawMarketingAddress,  placeAddr, lockedPos, profileAddr);
+          if (!lockInt)
+          {
+              await this.logUnlockErr("lock not found", taskKey, taskVal);
+              await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "lock not found");
+              await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
+              await logger.info('----------------------------------------------------------------------');
+              return true;
+          }
+
+         
+          await this.cancelTask(rawMarketingAddress, taskKey, taskVal, "lock successfully removed");
+          await locksRepository.removeLock(rawMarketingAddress, lockInt.id);
+
+          //await locksRepository.removeLockByPlaceAddrAndLockedPos(rawMarketingAddress, placeAddr, lockedPos, profileAddr);
+
+          await logger.info(`[MarketingTaskProcessor] removed lock for place=${placeAddr} pos=${lockedPos} profile=${profileAddr}`);
+      }
+      
+      // pay_bonus
+      else if (taskVal.payload.tag == 5) {
+        const paid = await this.payJettonBonus(rawMarketingAddress, taskKey, taskVal);
+        if (!paid) {
+          return false;
+        }
+      }
+
+      // reinvest
+      else if (taskVal.payload.tag === 6) {
+        const created = await this.createPlace(rawMarketingAddress, taskKey, taskVal);
+        if (!created) {
+          return false;
+        }
+      }
+
+      // move_or_bonus
+      else if (taskVal.payload.tag === 7) {
+        const placeCount = await getPlacesCount(rawMarketingAddress, taskVal.m + 1, taskVal.profile_addr);
+        if (placeCount > 0)
+        {
+          const paid = await this.payJettonBonus(rawMarketingAddress, taskKey, taskVal);
+          if (!paid) {
+            return false;
+          }
         }
         else
         {
-            // get next pos
-            const nextPos = await marketingApi.getNextPos(rawMarketingAddress, rootPlace.m, rootPlace.profile_addr);
-            // const locks = await locksRepository.getLocks(rootPlace.m, rootPlace.profile_addr, 1, Number.MAX_SAFE_INTEGER);
-            // const nextPos = await findNextPos(rootPlace, locks.items);
-            if (!nextPos) {
-              //await logger.error(`[MarketingTaskProcessor] next position not found for profile ${this.toFriendly(taskVal.profile)} (m=${taskVal.m})`);
-              console.error(`[MarketingTaskProcessor] next position not found for profile ${taskVal.profile_addr} (m=${taskVal.m})`);
-              return false;
-            }
-
-            //await logger.info(`[MarketingTaskProcessor] next position for profile ${this.toFriendly(taskVal.profile)} (m=${taskVal.m}): address= ${nextPos.addr} pos=${nextPos.pos}`);
-            console.info(`[MarketingTaskProcessor] next position for profile ${taskVal.profile_addr} (m=${taskVal.m}): parent= ${nextPos.parent_addr} pos=${nextPos.pos}`);
-
-            rawParentAddr = nextPos.parent_addr;
-        }
-
-        const parentRow = await placesRepository.getPlaceByAddress(rawMarketingAddress, rawParentAddr);
-        if (!parentRow)
-        {
-          throw "Parent row not foiund";
-        }
-
-        // get parent data BEFORE adding the child
-        const parentDataBefore = await fetchMatrixPlaceData(rawParentAddr);
-
-        // create place
-        const createResult = await this.createPlaceFromTask(rawMarketingAddress, taskKey, taskVal, parentRow);
-
-        const info: PlaceInfo = {
-          kind: createResult.kind,
-          profileAddress: Address.parse(taskVal.profile_addr),
-          placeNumber: createResult.place_number,
-          inviterProfileAddress: createResult.inviter_profile_addr ? 
-            Address.parse(createResult.inviter_profile_addr) : 
-            null,
-        };
-
-        // send deploy
-        const parentAddress = Address.parse(parentRow.addr);
-        const deployBody = Marketing.deployPlaceMessage(taskKey, parentAddress, placeInfoToCell(info), taskVal.query_id);
-        await sendPaymentToMarketing(rawMarketingAddress, taskKey, deployBody, toNano('0.5'));
-        await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to multi for task key=${taskKey}`);
-
-        // waif until new place data appears
-        const newChildAddr = await waitForNewSeqno(parentRow.addr, parentDataBefore);
-        if (!newChildAddr)
-        {
-            await logger.error(`[MarketingTaskProcessor] could not get the new child's data of parent ${parentRow.addr}`);
+          const created = await this.createPlace(rawMarketingAddress, taskKey, taskVal, null, taskVal.m + 1);
+          if (!created) {
             return false;
+          }
         }
-
-        // confirm data in db
-        await placesRepository.updateConfirm(createResult.id);
-        await logger.info(`[MarketingTaskProcessor] updated place #${createResult.id} with on-chain address ${newChildAddr} and confirmed`);
-      }
-
-      // else if (taskVal.payload.tag === 3) {
-      //     const lockPosPayload = taskVal.payload as MultiTaskLockPosPayload;
-      //     const placeAddr = this.toFriendly(lockPosPayload.pos.parent);
-      //     const lockedPos = lockPosPayload.pos.pos;
-
-      //     // validation
-      //     const profileData = await fetchProfileData(taskVal.profile);
-      //     if (!profileData || !profileData.owner)
-      //     {
-      //       await this.logLockErr("failed to load profile data", taskKey, taskVal);
-      //       await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //       return false;
-      //     }
-
-      //     if (this.toFriendly(lockPosPayload.source) != this.toFriendly(profileData.owner))
-      //     {
-      //       await this.logLockErr("unauthorized sender", taskKey, taskVal);
-      //       await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //       return false;
-      //     }
-
-      //     const rootPlace = await this.findRootPlace(taskVal.m, taskVal.profile);
-      //     if (!rootPlace)
-      //     {
-      //         await this.logLockErr("failed to fetch root place", taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         return false;
-      //     }
-
-      //     const placeRow = await placesRepository.getPlaceByAddress(placeAddr);
-      //     if (!placeRow)
-      //     {
-      //         await this.logLockErr("failed to get place", taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         return false;
-      //     }
-
-      //     if (placeRow.m != taskVal.m)
-      //     {
-      //         await this.logLockErr(`place is in the diff matrix`, taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         return true;
-      //     }
-
-      //     if (!placeRow.mp.startsWith(rootPlace.mp))
-      //     {
-      //         await this.logLockErr("place is in the diff subtree", taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         return false;
-      //     }
-
-      //     if (placeRow.filling == 0)
-      //     {
-      //         await this.logLockErr("empty place", taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         return false;
-      //     }
-
-      //     const profileAddr = this.toFriendly(taskVal.profile);
-
-      //     const existingLock = await locksRepository.getLockByPlaceAddrAndLockedPos(placeAddr, lockedPos, profileAddr);
-      //     if (existingLock)
-      //     {
-      //         await this.logLockErr(`duplicate lock`, taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-      //         await logger.info('----------------------------------------------------------------------');
-      //         return true;
-      //     }
-
-      //     const otherPosLock = await locksRepository.getLockByPlaceAddrAndLockedPos(placeAddr, lockedPos == 0 ? 1 : 0, profileAddr);
-      //     if (otherPosLock)
-      //     {
-      //         await this.logLockErr(`sibling pos is already locked`, taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         return false;
-      //     }
-
-        
-      //     // processing
-      //     const createResult = await this.createLockFromTask(taskKey, taskVal, placeRow, lockedPos);
-
-      //     await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-       
-      //     await locksRepository.updateLockConfirm(createResult.id);
-      //     await logger.info(`[MarketingTaskProcessor] updated lock #${createResult.id} with confirmed`);
-      // }
-
-      // else if (taskVal.payload.tag === 4) {
-      //     const unlockPosPayload = taskVal.payload as MultiTaskUnlockPosPayload;
-      //     const placeAddr = this.toFriendly(unlockPosPayload.pos.parent);
-      //     const lockedPos = unlockPosPayload.pos.pos;
-      //     const profileAddr = this.toFriendly(taskVal.profile);
-
-
-      //     // validation
-      //     const profileData = await fetchProfileData(taskVal.profile);
-      //     if (!profileData || !profileData.owner)
-      //     {
-      //       await this.logUnlockErr("failed to load profile data", taskKey, taskVal);
-      //       await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //       return false;
-      //     }
-
-      //     if (this.toFriendly(unlockPosPayload.source) != this.toFriendly(profileData.owner))
-      //     {
-      //       await this.logUnlockErr("unauthorized sender", taskKey, taskVal);
-      //       await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //       return false;
-      //     }
-
-      //     const lock = await locksRepository.getLockByPlaceAddrAndLockedPos(placeAddr, lockedPos, profileAddr);
-      //     if (!lock)
-      //     {
-      //         await this.logUnlockErr("lock not found", taskKey, taskVal);
-      //         await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-      //         await logger.info(`[MarketingTaskProcessor] last task key=${taskKey} successfully processed`);
-      //         await logger.info('----------------------------------------------------------------------');
-      //         return true;
-      //     }
-
-      //     await this.cancelTask(rawMultiAddress, taskKey, taskVal);
-
-      //     await locksRepository.removeLock(lock.id);
-
-      //     await logger.info(`[MarketingTaskProcessor] removed lock #${lock.id}`);
-          
-      // }
-      
-
-      else if (taskVal.payload.tag == 5) {
-        console.log("pay jetton bonus");
-        const profileData = await fetchProfileData(taskVal.profile_addr);
-  
-        if (!profileData?.owner_addr)
-        {
-           //     await logger.error(`[MarketingTaskProcessor] cannot find out profile wallet (task key=${taskKey})`);
-          console.error(`[MarketingTaskProcessor] cannot find out profile wallet (task key=${taskKey})`);
-          return false;
-        }
-        const walletAddr = Address.parse(profileData?.owner_addr!);
-     
-
-        const payBonusBody = Marketing.payBonusMessage(taskKey, walletAddr, taskVal.query_id);
-        await sendPaymentToMarketing(rawMarketingAddress, taskKey, payBonusBody, toNano('0.5'));
-        await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to marketing for task key=${taskKey}`);
       }
 
       else 
       {
-        //await logger.error(`[MarketingTaskProcessor] unsupported tag (key = ${taskKey})`);
-        console.error(`[MarketingTaskProcessor] unsupported tag (key = ${taskKey})`);
+        await logger.error(`[MarketingTaskProcessor] unsupported tag (key = ${taskKey})`);
         return false;
       }
 
@@ -434,25 +340,165 @@ export class TaskProcessor {
 
 
 
-//   private async cancelTask(rawMultiAddress: string, taskKey: number, taskVal: MultiTaskItem)
-//   {
-//       const cancelBody = Multi.cancelTaskMsg(taskKey, taskVal.query_id);
-//       await sendPaymentToMulti(rawMultiAddress, taskKey, cancelBody, toNano("0.5"));
-//       await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to multi for task key=${taskKey}`);
-//       await waitForTaskCanceled(rawMultiAddress, taskKey);
-//   }
+  private async createPlace(rawMarketingAddress: string, taskKey: number, taskVal: MarketingTaskResponse, fixedPos?: PlacePosDataResponse | null, targetMatrix = taskVal.m): Promise<boolean> {
+      const existing = await getPlaceByTaskKey(rawMarketingAddress, taskKey);
+      if (existing) {
+        await logger.error(`[MarketingTaskProcessor] skipping task key=${taskKey} because place already exists`);
+        return false;
+      }
 
-//   private async logLockErr(err: string, taskKey: number, taskVal: MultiTaskItem)
-//   {
-//     const lockPosPayload = taskVal.payload as MultiTaskLockPosPayload;
-//     await logger.error(`[MarketingTaskProcessor] [lock_pos]: ${err}; profile = ${this.toFriendly(taskVal.profile)}  m = ${taskVal.m}  parent = ${lockPosPayload.pos.parent}  (key = ${taskKey})`);
-//   }
+      const rootPlace = await this.findRootPlace(
+        rawMarketingAddress, 
+        targetMatrix,
+        taskVal.profile_addr
+      );
+    
+      if (!rootPlace) {
+        await logger.error(`[MarketingTaskProcessor] unable to resolve root place for profile ${taskVal.profile_addr} (m=${targetMatrix}, task key=${taskKey})`);
+        return false;
+      }
 
-//   private async logUnlockErr(err: string, taskKey: number, taskVal: MultiTaskItem)
-//   {
-//     const lockPosPayload = taskVal.payload as MultiTaskUnlockPosPayload;
-//     await logger.error(`[MarketingTaskProcessor] [unlock_pos]: ${err}; profile = ${this.toFriendly(taskVal.profile)}  m = ${taskVal.m}  parent = ${lockPosPayload.pos.parent}  (key = ${taskKey})`);
-//   }
+      await logger.info(`[MarketingTaskProcessor] resolved root place for profile ${taskVal.profile_addr}} (m=${targetMatrix}): address = ${rootPlace.addr}`);
+
+      let parentRow: PlaceRow | null;
+      let childPos: number;
+
+      if (fixedPos) {
+        await logger.info(`[MarketingTaskProcessor] fixed pos is set for create_place to parent=${fixedPos.parent_addr} pos=${fixedPos.pos} (task key=${taskKey})`);
+
+        parentRow = await placesRepository.getPlaceByAddress(rawMarketingAddress, fixedPos.parent_addr);
+        if (!parentRow) {
+          await logger.error(`[MarketingTaskProcessor] fixed parent cannot be found (task key=${taskKey})`);
+          return false;
+        }
+
+        if (parentRow.m !== targetMatrix) {
+          await logger.error(`[MarketingTaskProcessor] fixed parent is in a different matrix (task key=${taskKey})`);
+          return false;
+        }
+
+        const rootRow = await placesRepository.getPlaceByAddress(rawMarketingAddress, rootPlace.addr);
+        if (!rootRow) {
+          await logger.error(`[MarketingTaskProcessor] root place row cannot be found (task key=${taskKey})`);
+          return false;
+        }
+
+        if (!parentRow.mp.startsWith(rootRow.mp)) {
+          await logger.error(`[MarketingTaskProcessor] fixed parent is in a different structure (task key=${taskKey})`);
+          return false;
+        }
+
+        const nextAvailablePos = parentRow.seq_no + 1;
+        if (fixedPos.pos !== nextAvailablePos) {
+          await logger.error(`[MarketingTaskProcessor] selected pos=${fixedPos.pos} is not available; next pos=${nextAvailablePos} (task key=${taskKey})`);
+          return false;
+        }
+
+        childPos = fixedPos.pos;
+      } else {
+        const nextPos = await marketingApi.getNextPos(rawMarketingAddress, rootPlace.m, rootPlace.profile_addr);
+        if (!nextPos) {
+          await logger.error(`[MarketingTaskProcessor] next position not found for profile ${taskVal.profile_addr} (m=${targetMatrix})`);
+          return false;
+        }
+
+        await logger.info(`[MarketingTaskProcessor] next position for profile ${taskVal.profile_addr} (m=${targetMatrix}): parent= ${nextPos.parent_addr} pos=${nextPos.pos}`);
+
+        parentRow = await placesRepository.getPlaceByAddress(rawMarketingAddress, nextPos.parent_addr);
+        if (!parentRow) {
+          throw "Parent row not foiund";
+        }
+
+        childPos = nextPos.pos;
+      }
+
+      const parentDataBefore = await fetchMatrixPlaceData(parentRow.addr);
+      const createResult = await this.createPlaceFromTask(rawMarketingAddress, taskKey, taskVal, parentRow, childPos, targetMatrix);
+
+      const deployBody = await fetchDeployPlaceBody({
+        queryId: taskVal.query_id,
+        key: taskKey,
+        parentAddr: parentRow.addr,
+        kind: createResult.kind,
+        profileAddr: taskVal.profile_addr,
+        placeNumber: Number(createResult.place_number),
+        inviterProfileAddr: createResult.inviter_profile_addr
+      });
+
+      if (!deployBody || !deployBody.boc_hex)
+      {
+        await logger.error(`[MarketingTaskProcessor] could not retrieve body for deploy place cmd; task key:${taskKey}`);
+        return false;
+      }
+
+      await sendPaymentToMarketing(rawMarketingAddress, taskKey, Cell.fromHex(deployBody.boc_hex), toNano('0.5'));
+      await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to marketing for task key=${taskKey}`);
+
+      const newChildAddr = await waitForNewSeqno(parentRow.addr, parentDataBefore);
+      if (!newChildAddr)
+      {
+        await logger.error(`[MarketingTaskProcessor] could not get the new child's data of parent ${parentRow.addr}`);
+        return false;
+      }
+
+      await placesRepository.updateConfirm(createResult.id);
+      await logger.info(`[MarketingTaskProcessor] updated place #${createResult.id} with on-chain address ${newChildAddr} and confirmed`);
+      return true;
+  }
+
+  private async payJettonBonus(rawMarketingAddress: string, taskKey: number, taskVal: MarketingTaskResponse): Promise<boolean> {
+      const profileData = await fetchProfileData(taskVal.profile_addr);
+
+      if (!profileData?.owner_addr)
+      {
+        await logger.error(`[MarketingTaskProcessor] cannot find out profile wallet (task key=${taskKey})`);
+        return false;
+      }
+
+      const payBonusBodyResponse = await fetchPayBonusBody({
+        queryId: taskVal.query_id,
+        key: taskKey,
+        walletAddr: profileData.owner_addr,
+      });
+
+      if (!payBonusBodyResponse?.boc_hex) {
+        await logger.error(`[MarketingTaskProcessor] could not retrieve body for pay bonus cmd; task key=${taskKey}`);
+        return false;
+      }
+
+      const payBonusBody = Cell.fromHex(payBonusBodyResponse.boc_hex);
+      await sendPaymentToMarketing(rawMarketingAddress, taskKey, payBonusBody, toNano('0.5'));
+      await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to marketing for task key=${taskKey}`);
+      return true;
+  }
+
+  private async cancelTask(rawMarketingAddress: string, taskKey: number, taskVal: MarketingTaskResponse, comment: string)
+  {
+      const cancelBodyResponse = await fetchCancelTaskBody({
+        queryId: taskVal.query_id,
+        key: taskKey,
+        comment,
+      });
+
+      if (!cancelBodyResponse?.boc_hex) {
+        throw new Error(`Could not retrieve cancel task body for task key=${taskKey}`);
+      }
+
+      const cancelBody = Cell.fromHex(cancelBodyResponse.boc_hex);
+      await sendPaymentToMarketing(rawMarketingAddress, taskKey, cancelBody, toNano("0.5"));
+      await logger.info(`[MarketingTaskProcessor] sent 0.5 TON from processor wallet to marketing for cancel task key=${taskKey}`);
+      await waitForTaskCanceled(rawMarketingAddress, taskKey);
+  }
+
+  private async logLockErr(err: string, taskKey: number, taskVal: MultiTaskItemResponse)
+  {
+    await logger.error(`[MarketingTaskProcessor] [lock_pos]: ${err}; profile = ${taskVal.profile_addr}  m = ${taskVal.m}  parent = ${taskVal.payload.pos?.parent_addr}  (key = ${taskKey})`);
+  }
+
+  private async logUnlockErr(err: string, taskKey: number, taskVal: MultiTaskItemResponse)
+  {
+    await logger.error(`[MarketingTaskProcessor] [unlock_pos]: ${err}; profile = ${taskVal.profile_addr}  m = ${taskVal.m}  parent = ${taskVal.payload.pos?.parent_addr}  (key = ${taskKey})`);
+  }
 
   private toFriendly(address: Address): string {
     return address.toString({ urlSafe: true, bounceable: true, testOnly: false });
@@ -476,26 +522,21 @@ export class TaskProcessor {
     return this.findRootPlace(rawMarketingAddress, m, inviterProfile);
   }
 
-  private async createPlaceFromTask(rawMarketingAddress: string, taskKey: number, taskVal: MarketingTaskResponse, parentRow: PlaceRow): Promise<PlaceRow> {
+  private async createPlaceFromTask(rawMarketingAddress: string, taskKey: number, taskVal: MarketingTaskResponse, parentRow: PlaceRow, childPos: number, targetMatrix: number): Promise<PlaceRow> {
 
     const profileContent = await fetchProfileContent(taskVal.profile_addr);
     if (!profileContent) {
       throw new Error(`Profile content missing for ${taskVal.profile_addr}`);
     }
 
-    const login = profileContent.login;
-
-    const placeNumber =(await getMaxPlaceNumber(rawMarketingAddress, taskVal.m, taskVal.profile_addr)) + 1;
+    const placeNumber =(await getMaxPlaceNumber(rawMarketingAddress, targetMatrix, taskVal.profile_addr)) + 1;
 
     // calc placeAddr
-    const placeAddrRes = await fetchPlaceAddress(rawMarketingAddress, taskVal.m, parentRow.addr, parentRow.seq_no + 1);
+    const placeAddrRes = await fetchPlaceAddress(rawMarketingAddress, targetMatrix, parentRow.addr, childPos);
     if (!placeAddrRes) {
       throw new Error(`Cannto detetmain place addr`);
     }
 
-    // Use current filling to pick next position: 0 -> left, 1 -> right.
-    const childPos = parentRow.seq_no + 1;
-   
     const mp = `${parentRow.mp}${childPos.toString(16).toUpperCase().padStart(8, "0")}`;
 
     const rawInviterProfileAddr = await fetchInviterProfileAddr(taskVal.profile_addr, NEO_PROGRAM);
@@ -506,7 +547,7 @@ export class TaskProcessor {
 
     const newPlace: NewPlace = {
       marketing_addr: rawMarketingAddress,
-      m: taskVal.m,
+      m: targetMatrix,
       profile_addr: taskVal.profile_addr,
       address: placeAddrRes.addr,
       parent_address: parentRow.addr,
@@ -519,7 +560,7 @@ export class TaskProcessor {
       kind: kind,
       place_number: placeNumber,
       created_at: Date.now(),
-      login: login,
+      login: profileContent.login,
       task_key: taskKey,
       task_query_id: Number(taskVal.query_id ?? 0),
       task_source_addr: payload.source_addr,
@@ -530,37 +571,34 @@ export class TaskProcessor {
     const result = await placesRepository.addPlace(newPlace);
     await placesRepository.incrementSeqNo(rawMarketingAddress, parentRow.id);
    
-    console.info(`[MarketingTaskProcessor] created place for profile ${newPlace.profile_addr}: parent=${parentRow.addr}`);
-    //await logger.info(`[MarketingTaskProcessor] created place for profile ${newPlace.profile_addr}: parent=${parentRow.addr}`);
+    await logger.info(`[MarketingTaskProcessor] created place for profile ${newPlace.profile_addr}: parent=${parentRow.addr}`);
     return result;
   }
 
-//   private async createLockFromTask(taskKey: number, taskVal: MultiTaskItem, placeRow: PlaceRow, lockedPos: number): Promise<LockRow> {
+  private async createLockFromTask(taskKey: number, taskVal: MultiTaskItemResponse, placeRow: PlaceRow, lockedPos: number): Promise<LockRow> {
 
-//     const payload = taskVal.payload;
-//     const taskSource = payload.tag === 1 || payload.tag === 3 || payload.tag === 4 ? this.toFriendly(payload.source) : null;
-//     const mp = `${placeRow.mp}${lockedPos}`;
+    const mp = `${placeRow.mp}${lockedPos.toString(16).toUpperCase().padStart(8, "0")}`;
 
-//     const newLock: NewLock = {
-//         profile_addr: this.toFriendly(taskVal.profile),
-//         craeted_at: Date.now(),
+    const newLock: NewLock = {
+        marketing_addr: placeRow.marketing_addr,
+        mp: mp,
+        m: placeRow.m,
+        profile_addr: taskVal.profile_addr,
+        place_addr: placeRow.addr,
+        locked_pos: lockedPos,
+        place_profile_login: placeRow.profile_login,
+        place_number: placeRow.place_number,
 
-//         m: placeRow.m,
-//         mp: mp,
-//         place_addr: placeRow.addr,
-//         locked_pos: lockedPos,
-//         place_profile_login: placeRow.profile_login,
-//         place_number: placeRow.place_number,
+        task_key: taskKey,
+        task_query_id: taskVal.query_id,
+        task_source_addr: taskVal.payload.source_addr ?? null,
 
-//         task_key: taskKey,
-//         task_query_id: Number(taskVal.query_id ?? 0),
-//         task_source_addr: taskSource,
+        created_at: Date.now(),
+        confirmed: false,
+    };
 
-//         confirmed: false,
-//     };
-
-//     const result = await locksRepository.addLock(newLock);
-//     await logger.info(`[MarketingTaskProcessor] [lock_pos] created lock for profile ${newLock.profile_addr}: place=${newLock.place_addr}`);
-//     return result;
-//   }
+    const result = await locksRepository.addLock(newLock);
+    await logger.info(`[MarketingTaskProcessor] [lock_pos] created lock for profile ${newLock.profile_addr}: place=${newLock.place_addr}`);
+    return result;
+  }
 }

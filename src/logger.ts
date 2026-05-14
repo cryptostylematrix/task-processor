@@ -14,7 +14,7 @@ export type SeqLevel =
 async function sendToSeq(
   level: SeqLevel,
   message: string,
-  properties: Record<string, any> = {}
+  properties: Record<string, unknown> = {}
 ): Promise<void> {
   try {
     await axios.post(
@@ -35,29 +35,76 @@ async function sendToSeq(
   }
 }
 
+const isLocal = process.env.NODE_ENV !== "production";
+
+function toSeqProperties(props?: unknown): Record<string, unknown> {
+  if (!props) {
+    return {};
+  }
+
+  if (props instanceof Error) {
+    return {
+      name: props.name,
+      message: props.message,
+      stack: props.stack,
+    };
+  }
+
+  if (typeof props === "object" && !Array.isArray(props)) {
+    return props as Record<string, unknown>;
+  }
+
+  return { value: props };
+}
+
+function writeLocal(level: SeqLevel, message: string, props?: unknown): void {
+  const output = props ? [message, props] : [message];
+
+  if (level === "Error" || level === "Fatal") {
+    console.error(...output);
+    return;
+  }
+
+  if (level === "Warning") {
+    console.warn(...output);
+    return;
+  }
+
+  console.info(...output);
+}
+
+function log(level: SeqLevel, message: string, props?: unknown): Promise<void> | void {
+  if (isLocal) {
+    writeLocal(level, message, props);
+    return;
+  }
+
+  return sendToSeq(level, message, toSeqProperties(props));
+}
+
 // Public logger API
 export const logger = {
-  info(message: string, props?: Record<string, any>) {
-    return sendToSeq("Information", message, props);
+  info(message: string, props?: unknown) {
+    return log("Information", message, props);
   },
 
-  warn(message: string, props?: Record<string, any>) {
-    return sendToSeq("Warning", message, props);
+  warn(message: string, props?: unknown) {
+    return log("Warning", message, props);
   },
 
-  error(message: string, props?: Record<string, any>) {
-    return sendToSeq("Error", message, props);
+  error(message: string, props?: unknown) {
+    return log("Error", message, props);
   },
 
-  debug(message: string, props?: Record<string, any>) {
-    return sendToSeq("Debug", message, props);
+  debug(message: string, props?: unknown) {
+    return log("Debug", message, props);
   },
 
-  fatal(message: string, props?: Record<string, any>) {
-    return sendToSeq("Fatal", message, props);
+  fatal(message: string, props?: unknown) {
+    return log("Fatal", message, props);
   },
 
-  verbose(message: string, props?: Record<string, any>) {
-    return sendToSeq("Verbose", message, props);
+  verbose(message: string, props?: unknown) {
+    return log("Verbose", message, props);
   },
 };

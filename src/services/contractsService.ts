@@ -5,7 +5,7 @@ import { WalletContractV4, type OpenedContract } from "@ton/ton";
 import { tonConfig } from "../config";
 import { retryExp } from "../utils/retry";
 import { logger } from "../logger";
-import { FirstTaskResponse, getInviteData, getMarketingFirstTask, getMatrixPlaceData, getPlaceData, getProfileNftData, getProfilePrograms, MatrixPlaceDataResponse, PlaceDataResponse, ProfileContentResponse, ProfileDataResponse, ProgramDataResponse } from "../api/contractsApi";
+import { buildMarketingCancelTaskBody, buildMarketingDeployPlaceBody, buildMarketingPayBonusBody, BuildMarketingCancelTaskBodyRequest, BuildMarketingDeployPlaceBodyRequest, BuildMarketingPayBonusBodyRequest, CancelTaskBodyResponse, DeployPlaceBodyResponse, FirstTaskResponse, getInviteData, getMarketingFirstTask, getMatrixPlaceData, getPlaceData, getProfileNftData, getProfilePrograms, MatrixPlaceDataResponse, PayBonusBodyResponse, PlaceDataResponse, ProfileContentResponse, ProfileDataResponse, ProgramDataResponse } from "../api/contractsApi";
 import { getPlaceAddress, MarketingPlaceAddress } from "../api/marketingApi";
 
 const normalizeProgramCode = (program: number | string) => {
@@ -35,6 +35,26 @@ export const fetchMatrixPlaceData = async (placeAddr: string): Promise<MatrixPla
   const placeData = await retryExp(() => limited(() => getMatrixPlaceData(placeAddr)));
   return placeData;
 };
+
+export const fetchDeployPlaceBody = async(request: BuildMarketingDeployPlaceBodyRequest): Promise<DeployPlaceBodyResponse | null> => {
+  const deployPlaceBody = await retryExp(() => limited(() => buildMarketingDeployPlaceBody(request)));
+  return deployPlaceBody;
+}
+
+export const fetchCancelTaskBody = async(request: BuildMarketingCancelTaskBodyRequest): Promise<CancelTaskBodyResponse | null> => {
+  const cancelTaskBody = await retryExp(() => limited(() => buildMarketingCancelTaskBody(request)));
+  return cancelTaskBody;
+}
+
+export const fetchPayBonusBody = async(request: BuildMarketingPayBonusBodyRequest): Promise<PayBonusBodyResponse | null> => {
+  const payBonusBody = await retryExp(() => limited(() => buildMarketingPayBonusBody(request)));
+  return payBonusBody;
+}
+
+export const fetchTotalPlacesCount = async(request: BuildMarketingDeployPlaceBodyRequest): Promise<DeployPlaceBodyResponse | null> => {
+  const deployPlaceBody = await retryExp(() => limited(() => buildMarketingDeployPlaceBody(request)));
+  return deployPlaceBody;
+}
 
 // export const fetchProgram = async (profileAddr: Address, program: number): Promise<ProgramData | null> => {
 //   const client = getTonClient();

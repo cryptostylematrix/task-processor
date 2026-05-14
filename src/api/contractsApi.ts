@@ -240,6 +240,7 @@ export type BuildMarketingLockPosBodyRequest = {
 export type BuildMarketingUnlockPosBodyRequest = BuildMarketingLockPosBodyRequest;
 
 export type BuildMarketingDeployPlaceBodyRequest = {
+  queryId: number;
   key: number;
   parentAddr: string;
   kind: number;
@@ -253,6 +254,7 @@ export type DeployPlaceBodyResponse = {
 };
 
 export type BuildMarketingPayBonusBodyRequest = {
+  queryId: number;
   key: number;
   walletAddr: string;
 };
@@ -262,6 +264,7 @@ export type PayBonusBodyResponse = {
 };
 
 export type BuildMarketingCancelTaskBodyRequest = {
+  queryId: number;
   key: number;
   comment: string;
 };
@@ -273,6 +276,10 @@ export type CancelTaskBodyResponse = {
 export type MarketingTaskPayloadResponse = {
   tag: number;
   source_addr?: string | null;
+  amount?: number | string | null;
+  first?: boolean | null;
+  place_number?: number | null;
+  title?: string | null;
   pos?: PlacePosDataResponse | null;
 };
 
@@ -740,9 +747,10 @@ export async function buildMarketingDeployPlaceBody(
   const profileAddr = request.profileAddr?.trim();
   const inviterProfileAddr = request.inviterProfileAddr?.trim();
   if (!parentAddr || !profileAddr) return null;
-  if (!Number.isFinite(request.key) || !Number.isFinite(request.kind) || !Number.isFinite(request.placeNumber)) return null;
+  if (!Number.isFinite(request.queryId) || !Number.isFinite(request.key) || !Number.isFinite(request.kind) || !Number.isFinite(request.placeNumber)) return null;
 
   const url = new URL("/contracts/marketing/body/deploy-place", normalizedBase || defaultOrigin);
+  url.searchParams.set("query_id", String(request.queryId));
   url.searchParams.set("key", String(request.key));
   url.searchParams.set("parent_addr", parentAddr);
   url.searchParams.set("kind", String(request.kind));
@@ -757,9 +765,10 @@ export async function buildMarketingPayBonusBody(
   request: BuildMarketingPayBonusBodyRequest,
 ): Promise<PayBonusBodyResponse | null> {
   const walletAddr = request.walletAddr?.trim();
-  if (!walletAddr || !Number.isFinite(request.key)) return null;
+  if (!walletAddr || !Number.isFinite(request.queryId) || !Number.isFinite(request.key)) return null;
 
   const url = new URL("/contracts/marketing/body/pay-bonus", normalizedBase || defaultOrigin);
+  url.searchParams.set("query_id", String(request.queryId));
   url.searchParams.set("key", String(request.key));
   url.searchParams.set("wallet_addr", walletAddr);
 
@@ -770,9 +779,10 @@ export async function buildMarketingCancelTaskBody(
   request: BuildMarketingCancelTaskBodyRequest,
 ): Promise<CancelTaskBodyResponse | null> {
   const comment = request.comment?.trim();
-  if (!comment || !Number.isFinite(request.key)) return null;
+  if (!comment || !Number.isFinite(request.queryId) || !Number.isFinite(request.key)) return null;
 
   const url = new URL("/contracts/marketing/body/cancel-task", normalizedBase || defaultOrigin);
+  url.searchParams.set("query_id", String(request.queryId));
   url.searchParams.set("key", String(request.key));
   url.searchParams.set("comment", comment);
 

@@ -20,7 +20,7 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 
 # Allow PORT override via env (default 3000)
-ENV PORT=3000
+ENV PORT=3001
 EXPOSE ${PORT}
 
 CMD ["node", "dist/index.js"]

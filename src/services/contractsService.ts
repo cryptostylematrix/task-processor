@@ -3,7 +3,7 @@ import { getTonClient, limited } from "./tonClient";
 import { mnemonicToPrivateKey } from "@ton/crypto";
 import { WalletContractV4, type OpenedContract } from "@ton/ton";
 import { tonConfig } from "../config";
-import { retryExp } from "../utils/retry";
+import { DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, retryExp } from "../utils/retry";
 import { logger } from "../logger";
 import { buildMarketingCancelTaskBody, buildMarketingDeployPlaceBody, buildMarketingPayBonusBody, BuildMarketingCancelTaskBodyRequest, BuildMarketingDeployPlaceBodyRequest, BuildMarketingPayBonusBodyRequest, CancelTaskBodyResponse, DeployPlaceBodyResponse, FirstTaskResponse, getInviteData, getMarketingFirstTask, getMatrixPlaceData, getPlaceData, getProfileNftData, getProfilePrograms, MatrixPlaceDataResponse, PayBonusBodyResponse, PlaceDataResponse, ProfileContentResponse, ProfileDataResponse, ProgramDataResponse } from "../api/contractsApi";
 import { getPlaceAddress, MarketingPlaceAddress } from "../api/marketingApi";
@@ -189,7 +189,7 @@ export const sendPaymentToMarketing = async (toAddress: string, taskKey: number,
       await logger.info(`[TON] trying sendTransfer with seqno=${seqno}`);
       await limited(() => openedWallet.sendTransfer(transfer));
     } catch (error) {
-      const currentSeqno = await retryExp(() => limited(() => openedWallet.getSeqno()), 2, 300);
+      const currentSeqno = await retryExp(() => limited(() => openedWallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS);
       await logger.warn(`[TON] sendTransfer failed, seqno=${seqno}, currentSeqno=${currentSeqno}, retrying with the same seqno`);
       throw error;
     }

@@ -1,9 +1,12 @@
 import { logger } from "../logger";
 
+export const DEFAULT_RETRIES = 10;
+export const DEFAULT_RETRY_DELAY_MS = 2000;
+
 export async function retry<T>(
   fn: () => Promise<T>,
-  retries = 5,
-  delay = 300,
+  retries = DEFAULT_RETRIES,
+  delay = DEFAULT_RETRY_DELAY_MS,
   label = "TON"
 ): Promise<T> {
   try {
@@ -18,8 +21,8 @@ export async function retry<T>(
 
 export async function retryExp<T>(
   fn: () => Promise<T>,
-  retries = 5,
-  baseDelay = 300, // initial delay
+  retries = DEFAULT_RETRIES,
+  baseDelay = DEFAULT_RETRY_DELAY_MS,
   label = "TON"
 ): Promise<T> {
   let attempt = 0;

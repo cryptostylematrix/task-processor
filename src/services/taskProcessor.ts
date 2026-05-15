@@ -6,6 +6,7 @@ import { logger } from "../logger";
 import { MarketingTaskResponse, MultiTaskItemResponse, PlacePosDataResponse } from "../api/contractsApi";
 import { getMaxPlaceNumber, getPlaceByTaskKey, getPlacesCount, getTotalPlaceCount, marketingApi, MarketingNextPos, MarketingPlace } from "../api/marketingApi";
 import { fetchMatrixPlaceData, fetchInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno, fetchDeployPlaceBody, fetchCancelTaskBody, fetchPayBonusBody, waitForTaskCanceled, fetchFirstTask } from "./contractsService";
+import { DEFAULT_RETRIES } from "../utils/retry";
 
 
 
@@ -85,7 +86,7 @@ export class TaskProcessor {
         this.lastProcessedTaskKeyAttempts += 1;
 
         const attempt = this.lastProcessedTaskKeyAttempts;
-        const maxAttempts = 5;
+        const maxAttempts = DEFAULT_RETRIES;
         const waitMs = 2000 * (2 ** (attempt - 1));
 
         if (attempt < maxAttempts) {

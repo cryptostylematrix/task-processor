@@ -1,6 +1,6 @@
 import { apiConfig, appConfig } from "../config";
 import { logger } from "../logger";
-import { retryExp } from "../utils/retry";
+import { DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, retryExp } from "../utils/retry";
 
 export type MarketingPaginated<T> = {
   items: T[];
@@ -177,7 +177,7 @@ const safeGet = async <T>(path: string, query?: Record<string, string | number |
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
       return (await res.json()) as T;
-    }, 5, 300, "MarketingAPI");
+    }, DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, "MarketingAPI");
   } catch (err) {
     await logger.error("marketingApi request error:", err);
     return null;

@@ -99,6 +99,20 @@ class PlacesRepository {
     );
   }
 
+  async getUnconfirmedPlacesCount(marketing_addr: string): Promise<number> {
+    const result = await this.client.query<{ count: string }>(
+      `
+      SELECT COUNT(*) AS count
+      FROM marketing_places
+      WHERE marketing_addr = $1
+        AND confirmed = FALSE
+      `,
+      [marketing_addr],
+    );
+
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
   async addPlace(place: NewPlace): Promise<PlaceRow> {
     const indexValue = `${place.login}${place.place_number}`;
     const inviterProfile = place.inviter_profile_addr ?? null;

@@ -3,9 +3,9 @@ import { placesRepository, type NewPlace, type PlaceRow } from "../repositories/
 import { tonConfig } from "../config";
 import { LockRow, locksRepository, NewLock } from "../repositories/locksRepository";
 import { logger } from "../logger";
-import { getMarketingFirstTask, MarketingTaskResponse, MultiTaskItemResponse, PlacePosDataResponse } from "../api/contractsApi";
+import { MarketingTaskResponse, MultiTaskItemResponse, PlacePosDataResponse } from "../api/contractsApi";
 import { getMaxPlaceNumber, getPlaceByTaskKey, getPlacesCount, getTotalPlaceCount, marketingApi, MarketingNextPos, MarketingPlace } from "../api/marketingApi";
-import { fetchMatrixPlaceData, fetchInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno, fetchDeployPlaceBody, fetchCancelTaskBody, fetchPayBonusBody, waitForTaskCanceled } from "./contractsService";
+import { fetchMatrixPlaceData, fetchInviterProfileAddr, fetchPlaceAddress, fetchProfileContent, fetchProfileData, sendPaymentToMarketing, waitForNewSeqno, fetchDeployPlaceBody, fetchCancelTaskBody, fetchPayBonusBody, waitForTaskCanceled, fetchFirstTask } from "./contractsService";
 
 
 
@@ -63,9 +63,13 @@ export class TaskProcessor {
     const rawMarketingAddress = WATCHED_MARKETING_ADDRESS;
 
     try {
-     
-      //const firstTask = await fetchFirstTask(rawMarketingAddress);
-      const firstTask = await getMarketingFirstTask(rawMarketingAddress);
+      const unconfirmedPlacesCount = await placesRepository.getUnconfirmedPlacesCount(rawMarketingAddress);
+      if (unconfirmedPlacesCount > 0) {
+        await logger.error(`[MarketingTaskProcessor] found ${unconfirmedPlacesCount} unconfirmed place(s) in db for marketing=${rawMarketingAddress}`);
+        return false;
+      }
+
+      const firstTask = await fetchFirstTask(rawMarketingAddress);
       if (!firstTask || firstTask.flag == 0) {
         await logger.info(`[MarketingTaskProcessor] last: <empty>`);
         return true;

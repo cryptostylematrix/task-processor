@@ -1,4 +1,6 @@
 import { apiConfig, appConfig } from "../config";
+import { logger } from "../logger";
+import { retryExp } from "../utils/retry";
 
 export type MarketingPaginated<T> = {
   items: T[];
@@ -167,13 +169,17 @@ const emptyPlacesPage: MarketingPaginated<MarketingPlace> = { items: [], page: 1
 const emptyLocksPage: MarketingPaginated<MarketingLock> = { items: [], page: 1, total_pages: 1 };
 
 const safeGet = async <T>(path: string, query?: Record<string, string | number | undefined>): Promise<T | null> => {
+  const url = buildUrl(path, query);
+
   try {
-    const res = await fetch(buildUrl(path, query));
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-    return (await res.json()) as T;
+    return await retryExp(async () => {
+      const res = await fetch(url);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+      return (await res.json()) as T;
+    }, 5, 300, "MarketingAPI");
   } catch (err) {
-    console.error("marketingApi request error:", err);
+    await logger.error("marketingApi request error:", err);
     return null;
   }
 };

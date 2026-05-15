@@ -82,7 +82,7 @@ export const fetchPlaceAddress = async (rawMarketingAddr: string, m: number, raw
 }
 
 export const fetchInviterProfileAddr = async (rawProfileAddr: string, program: number | string): Promise<string | null> => {
-  const programs = await getProfilePrograms(rawProfileAddr);
+  const programs = await retryExp(() => limited(() => getProfilePrograms(rawProfileAddr)));
   if (!programs)
   {
     return null;

@@ -393,7 +393,7 @@ export class TaskProcessor {
           return false;
         }
 
-        const nextAvailablePos = parentRow.seq_no + 1;
+        const nextAvailablePos = Number(parentRow.seq_no) + 1;
         if (fixedPos.pos !== nextAvailablePos) {
           await logger.error(`[MarketingTaskProcessor] selected pos=${fixedPos.pos} is not available; next pos=${nextAvailablePos} (task key=${taskKey})`);
           return false;

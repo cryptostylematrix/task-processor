@@ -32,27 +32,27 @@ const findProgramData = (
 };
 
 export const fetchMatrixPlaceData = async (placeAddr: string): Promise<MatrixPlaceDataResponse | null> => {
-  const placeData = await retryExp(() => limited(() => getMatrixPlaceData(placeAddr)));
+  const placeData = await retryExp(() => limited(() => getMatrixPlaceData(placeAddr)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `getMatrixPlaceData place=${placeAddr}`);
   return placeData;
 };
 
 export const fetchDeployPlaceBody = async(request: BuildMarketingDeployPlaceBodyRequest): Promise<DeployPlaceBodyResponse | null> => {
-  const deployPlaceBody = await retryExp(() => limited(() => buildMarketingDeployPlaceBody(request)));
+  const deployPlaceBody = await retryExp(() => limited(() => buildMarketingDeployPlaceBody(request)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `buildMarketingDeployPlaceBody key=${request.key} queryId=${request.queryId}`);
   return deployPlaceBody;
 }
 
 export const fetchCancelTaskBody = async(request: BuildMarketingCancelTaskBodyRequest): Promise<CancelTaskBodyResponse | null> => {
-  const cancelTaskBody = await retryExp(() => limited(() => buildMarketingCancelTaskBody(request)));
+  const cancelTaskBody = await retryExp(() => limited(() => buildMarketingCancelTaskBody(request)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `buildMarketingCancelTaskBody key=${request.key} queryId=${request.queryId}`);
   return cancelTaskBody;
 }
 
 export const fetchPayBonusBody = async(request: BuildMarketingPayBonusBodyRequest): Promise<PayBonusBodyResponse | null> => {
-  const payBonusBody = await retryExp(() => limited(() => buildMarketingPayBonusBody(request)));
+  const payBonusBody = await retryExp(() => limited(() => buildMarketingPayBonusBody(request)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `buildMarketingPayBonusBody key=${request.key} queryId=${request.queryId}`);
   return payBonusBody;
 }
 
 export const fetchTotalPlacesCount = async(request: BuildMarketingDeployPlaceBodyRequest): Promise<DeployPlaceBodyResponse | null> => {
-  const deployPlaceBody = await retryExp(() => limited(() => buildMarketingDeployPlaceBody(request)));
+  const deployPlaceBody = await retryExp(() => limited(() => buildMarketingDeployPlaceBody(request)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `buildMarketingDeployPlaceBody key=${request.key} queryId=${request.queryId}`);
   return deployPlaceBody;
 }
 
@@ -77,12 +77,12 @@ export const fetchTotalPlacesCount = async(request: BuildMarketingDeployPlaceBod
 // };
 
 export const fetchPlaceAddress = async (rawMarketingAddr: string, m: number, rawParentAddr: string, pos: number): Promise<MarketingPlaceAddress | null> => {
-  const res = await retryExp(() => limited(() => getPlaceAddress(rawMarketingAddr, m, rawParentAddr, pos)));
+  const res = await retryExp(() => limited(() => getPlaceAddress(rawMarketingAddr, m, rawParentAddr, pos)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `getPlaceAddress marketing=${rawMarketingAddr} m=${m} parent=${rawParentAddr} pos=${pos}`);
   return res;
 }
 
 export const fetchInviterProfileAddr = async (rawProfileAddr: string, program: number | string): Promise<string | null> => {
-  const programs = await retryExp(() => limited(() => getProfilePrograms(rawProfileAddr)));
+  const programs = await retryExp(() => limited(() => getProfilePrograms(rawProfileAddr)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `getProfilePrograms profile=${rawProfileAddr}`);
   if (!programs)
   {
     return null;
@@ -95,14 +95,14 @@ export const fetchInviterProfileAddr = async (rawProfileAddr: string, program: n
   }
 
 
-  const inviterData = await retryExp(() => limited(() => getInviteData(programData.inviter_addr)));
+  const inviterData = await retryExp(() => limited(() => getInviteData(programData.inviter_addr)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `getInviteData invite=${programData.inviter_addr}`);
 
   const inviterProfile = inviterData?.owner?.owner_addr;
   return inviterProfile ?? null;
 };
 
 export const fetchFirstTask = async (rawMarketingAddr: string): Promise<FirstTaskResponse | null> => {
-  const firstTask = await retryExp(() => limited(() => getMarketingFirstTask(rawMarketingAddr)));
+  const firstTask = await retryExp(() => limited(() => getMarketingFirstTask(rawMarketingAddr)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `getMarketingFirstTask marketing=${rawMarketingAddr}`);
   return firstTask;
 };
 
@@ -112,7 +112,7 @@ export const fetchProfileContent = async (rawProfileAddr: string): Promise<Profi
 };
 
 export const fetchProfileData = async (rawProfileAddr: string): Promise<ProfileDataResponse | null> => {
-  const profileData = await retryExp(() => limited(() => getProfileNftData(rawProfileAddr)));
+  const profileData = await retryExp(() => limited(() => getProfileNftData(rawProfileAddr)), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `getProfileNftData profile=${rawProfileAddr}`);
   return profileData;
 };
 
@@ -146,7 +146,7 @@ let lastKnownSeqno: number | null = null;
 export const waitForSeqno = async (wallet: OpenedContract<WalletContractV4>, prevSeqno: number, timeoutMs = 30000, intervalMs = 1000): Promise<number> => {
   const start = Date.now();
   while (true) {
-    const current = await retryExp(() => limited(() => wallet.getSeqno()));
+    const current = await retryExp(() => limited(() => wallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `wallet.getSeqno prevSeqno=${prevSeqno}`);
 
     if (current > prevSeqno) {
       return current;
@@ -169,7 +169,7 @@ export const sendPaymentToMarketing = async (toAddress: string, taskKey: number,
   const wallet = WalletContractV4.create({ workchain: 0, publicKey: keyPair.publicKey });
   const openedWallet = client.open(wallet);
 
-  const seqno = lastKnownSeqno ?? await retryExp(() => limited(() => openedWallet.getSeqno()));
+  const seqno = lastKnownSeqno ?? await retryExp(() => limited(() => openedWallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `wallet.getSeqno taskKey=${taskKey}`);
 
   const transfer = {
     seqno,
@@ -189,11 +189,11 @@ export const sendPaymentToMarketing = async (toAddress: string, taskKey: number,
       await logger.info(`[TON] trying sendTransfer with seqno=${seqno}`);
       await limited(() => openedWallet.sendTransfer(transfer));
     } catch (error) {
-      const currentSeqno = await retryExp(() => limited(() => openedWallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS);
+      const currentSeqno = await retryExp(() => limited(() => openedWallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `wallet.getSeqno after sendTransfer failure taskKey=${taskKey}`);
       await logger.warn(`[TON] sendTransfer failed, seqno=${seqno}, currentSeqno=${currentSeqno}, retrying with the same seqno`);
       throw error;
     }
-  });
+  }, DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `sendTransfer taskKey=${taskKey} to=${toAddress} value=${value.toString()} seqno=${seqno}`);
 
   lastKnownSeqno = await waitForSeqno(openedWallet, seqno);
   lastPaidTaskKey = taskKey;

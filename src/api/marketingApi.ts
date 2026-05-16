@@ -170,6 +170,7 @@ const emptyLocksPage: MarketingPaginated<MarketingLock> = { items: [], page: 1, 
 
 const safeGet = async <T>(path: string, query?: Record<string, string | number | undefined>): Promise<T | null> => {
   const url = buildUrl(path, query);
+  const operation = `GET ${url}`;
 
   try {
     return await retryExp(async () => {
@@ -177,9 +178,9 @@ const safeGet = async <T>(path: string, query?: Record<string, string | number |
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
       return (await res.json()) as T;
-    }, DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, "MarketingAPI");
+    }, DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, operation);
   } catch (err) {
-    await logger.error("marketingApi request error:", err);
+    await logger.error(`marketingApi request error for ${operation}:`, err);
     return null;
   }
 };

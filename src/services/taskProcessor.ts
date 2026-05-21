@@ -505,10 +505,6 @@ export class TaskProcessor {
     await logger.error(`[MarketingTaskProcessor] [unlock_pos]: ${err}; profile = ${taskVal.profile_addr}  m = ${taskVal.m}  parent = ${taskVal.payload.pos?.parent_addr}  (key = ${taskKey})`);
   }
 
-  private toFriendly(address: Address): string {
-    return address.toString({ urlSafe: true, bounceable: true, testOnly: false });
-  }
-
   private async findRootPlace(rawMarketingAddress: string, m: number, rawPofileAddr: string): Promise<MarketingPlace | null> {
 
     // get root of the profile

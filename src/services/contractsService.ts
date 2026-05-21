@@ -141,7 +141,6 @@ export const waitForNewSeqno = async (placeAddr: string, prevData: MatrixPlaceDa
 };
 
 let lastPaidTaskKey: number | null = null;
-let lastKnownSeqno: number | null = null;
 
 export const waitForSeqno = async (wallet: OpenedContract<WalletContractV4>, prevSeqno: number, timeoutMs = 30000, intervalMs = 1000): Promise<number> => {
   const start = Date.now();
@@ -169,7 +168,7 @@ export const sendPaymentToMarketing = async (toAddress: string, taskKey: number,
   const wallet = WalletContractV4.create({ workchain: 0, publicKey: keyPair.publicKey });
   const openedWallet = client.open(wallet);
 
-  const seqno = lastKnownSeqno ?? await retryExp(() => limited(() => openedWallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `wallet.getSeqno taskKey=${taskKey}`);
+  const seqno = await retryExp(() => limited(() => openedWallet.getSeqno()), DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `wallet.getSeqno taskKey=${taskKey}`);
 
   const transfer = {
     seqno,
@@ -195,7 +194,7 @@ export const sendPaymentToMarketing = async (toAddress: string, taskKey: number,
     }
   }, DEFAULT_RETRIES, DEFAULT_RETRY_DELAY_MS, `sendTransfer taskKey=${taskKey} to=${toAddress} value=${value.toString()} seqno=${seqno}`);
 
-  lastKnownSeqno = await waitForSeqno(openedWallet, seqno);
+  await waitForSeqno(openedWallet, seqno);
   lastPaidTaskKey = taskKey;
 };
 
